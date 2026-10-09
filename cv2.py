@@ -1,4 +1,7 @@
-127.0.0.1:8000
+
+• 🛒 Stránka obchodu (pre zákazníkov): http://127.0.0.1:8000
+• 🛠️ Administračný panel (pre správu skladu): 127.0.0
+
 
 
 # 1. KATEGÓRIE
