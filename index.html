@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="sk">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>E-Shop Sklad a Nákupný košík</title>
+    <style>
+        :root {
+            --primary: #4f46e5;
+            --primary-hover: #4338ca;
+            --bg: #f9fafb;
+            --card-bg: #ffffff;
+            --text: #1f2937;
+            --text-muted: #4b5563;
+            --border: #e5e7eb;
+            --success: #10b981;
+            --danger: #ef4444;
+            --warning: #f59e0b;
+        }
+        body {
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background-color: var(--bg);
+            color: var(--text);
+            margin: 0;
+            padding: 20px;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 20px;
+        }
+        @media (max-width: 768px) {
+            .container {
+                grid-template-columns: 1fr;
+            }
+        }
+        h1, h2, h3 {
+            margin-top: 0;
+        }
+        .card {
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        .grid-products {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+            gap: 15px;
+        }
+        .product-item {
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 12px;
+            text-align: center;
+            background: #fff;
+            transition: transform 0.2s;
+        }
+        .product-item:hover {
+            transform: translateY(-2px);
+        }
+        .badge {
+            display: inline-block;
+            padding: 2px 6px;
+            font-size: 11px;
+            border-radius: 4px;
+            font-weight: bold;
+            text-transform: uppercase;
+        }
+        .badge-ovocie { background: #fee2e2; color: #991b1b; }
+        .badge-zelenina { background: #dcfce7; color: #166534; }
+        .badge-sladkost { background: #fef3c7; color: #92400e; }
+        .badge-ine { background: #f3f4f6; color: #374151; }
+        
+        .btn {
+            background: var(--primary);
+            color: white;
+            border: none;
+            padding: 6px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: 500;
+            width: 100%;
+            margin-top: 8px;
+        }
+        .btn:hover { background: var(--primary-hover); }
+        .btn:disabled { background: #cbd5e1; cursor: not-allowed; }
+        
+        .cart-list, .receipt-list {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+        .cart-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 0;
+            border-bottom: 1px solid var(--border);
+        }
+        .coupon-box {
+            display: flex;
+            gap: 10px;
+            margin-top: 15px;
+            padding-top: 15px;
+            border-top: 1px solid var(--border);
+        }
+        .coupon-box input {
+            flex: 1;
+            padding: 6px;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+        }
+        .coupon-box button {
+            width: auto;
+            margin-top: 0;
+        }
+        .summary-row {
+            display: flex;
+            justify-content: space-between;
+            font-weight: bold;
+            margin-top: 10px;
+            font-size: 1.1em;
+        }
+        .discount {
+            color: var(--success);
+        }
+    </style>
+</head>
+<body>
+
+<div style="max-width: 1200px; margin: 0 auto; padding-bottom: 10px;">
+    <h1>🛒 Simulátor nákupného skladu</h1>
+</div>
+
+<div class="container">
+    <div>
+        <div class="card">
+            <h2>📦 Ponuka tovaru (Sklad)</h2>
+            <div class="grid-products" id="products-grid"></div>
+        </div>
+    </div>
+
+    <div>
+        <div class="card">
+            <h2>🛒 Nákupný košík</h2>
+            <div id="cart-empty" style="color: var(--text-muted);">Košík je prázdny.</div>
+            <ul class="cart-list" id="cart-items"></ul>
+            
+            <div id="cart-summary-section" style="display: none;">
+                <div class="coupon-box">
+                    <input type="text" id="coupon-input" placeholder="Zadaj kupón (napr. ZLAVA)">
+                    <button class="btn" onclick="applyCoupon()" style="width: auto;">Použiť</button>
+                </div>
+                <hr style="border: 0; border-top: 1px solid var(--border); margin: 15px 0;">
+                <div class="summary-row">
+                    <span>Základná suma:</span>
+                    <span id="base-price">0.00 EUR</span>
+                </div>
+                <div class="summary-row discount" id="discount-row" style="display: none;">
+                    <span>Zľava 20%:</span>
+                    <span id="discount-val">0.00 EUR</span>
+                </div>
+                <div class="summary-row" style="border-top: 2px solid var(--text); padding-top: 5px; margin-top: 5px;">
+                    <span>Konečná suma:</span>
+                    <span id="final-price">0.00 EUR</span>
+                </div>
+                <button class="btn" onclick="checkout()" style="background: var(--success); margin-top: 15px;">Dokončiť nákup</button>
+            </div>
+        </div>
+        
+        <div class="card" id="receipt-card" style="display: none; border-color: var(--success);">
+            <h2 style="color: var(--success);">🧾 Účet za nákup</h2>
+            <ul class="receipt-list" id="receipt-items"></ul>
+            <div id="receipt-summary" style="margin-top: 15px; font-weight: bold;"></div>
+            <h3 style="margin-top: 20px; font-size: 1em;">🥦 Rozdelenie potravín:</h3>
+            <ul id="receipt-categories" style="padding-left: 20px; font-size: 0.9em; color: var(--text-muted);"></ul>
+            <button class="btn" onclick="resetApp()" style="background: var(--text); margin-top: 15px;">Nový nákup</button>
+        </div>
+    </div>
+</div>
+
+<script>
+    // Načítanie počiatočných dát z Python predlohy
+    const ovocie = ["jablko", "banan", "hruska", "slivka", "pomaranc", "broskyna"];
+    const zelenina = ["mrkva", "zemiak", "petrzlen", "celer"];
+    const sladkosti = ["cokolada", "cukor"];
+
+    let sklad = {
+        "jablko": { cena: 0.5, kategoria: "ovocie", mnozstvo: 10 },
+        "banan": { cena: 1.2, kategoria: "ovocie", mnozstvo: 5 },
+        "hruska": { cena: 0.8, kategoria: "ovocie", mnozstvo: 7 },
+        "slivka": { cena: 0.3, kategoria: "ovocie", mnozstvo: 8 },
+        "pomaranc": { cena: 0.6, kategoria: "ovocie", mnozstvo: 6 },
+        "broskyna": { cena: 0.9, kategoria: "ovocie", mnozstvo: 5 },
+        "mrkva": { cena: 0.4, kategoria: "zelenina", mnozstvo: 10 },
+        "zemiak": { cena: 0.2, kategoria: "zelenina", mnozstvo: 20 },
+        "petrzlen": { cena: 0.5, kategoria: "zelenina", mnozstvo: 5 },
+        "celer": { cena: 0.7, kategoria: "zelenina", mnozstvo: 3 },
+        "cokolada": { cena: 1.5, kategoria: "sladkost", mnozstvo: 4 },
+        "cukor": { cena: 1.0, kategoria: "sladkost", mnozstvo: 6 },
+        "mlieko": { cena: 1.3, kategoria: "ine", mnozstvo: 5 },
+        "chlieb": { cena: 2.0, kategoria: "ine", mnozstvo: 8 }
+    };
+
+    let kosik = {};
+    let hasDiscount = false;
+
+    function renderProducts() {
+        const grid = document.getElementById('products-grid');
+        grid.innerHTML = '';
+        for (const [nazov, info] of Object.entries(sklad)) {
+            const item = document.createElement('div');
+            item.className = 'product-item';
+            
+            let katClass = 'badge-ine';
+            if (ovocie.includes(nazov)) katClass = 'badge-ovocie';
+            else if (zelenina.includes(nazov)) katClass = 'badge-zelenina';
+            else if (sladkosti.includes(nazov)) katClass = 'badge-sladkost';
+
+            item.innerHTML = `
+                <div style="font-weight: bold; text-transform: capitalize;">${nazov}</div>
+                <div style="margin: 5px 0;"><span class="badge ${katClass}">${info.kategoria}</span></div>
+                <div style="font-size: 1.1em; color: var(--primary); font-weight: bold;">${info.cena.toFixed(2)} €</div>
+                <div style="font-size: 0.85em; color: var(--text-muted); margin-bottom: 8px;">Skladom: ${info.mnozstvo} ks</div>
+                <button class="btn" ${info.mnozstvo === 0 ? 'disabled' : ''} onclick="addToCart('${nazov}')">
+                    ${info.mnozstvo === 0 ? 'Vypredané' : 'Pridať'}
+                </button>
+            `;
+            grid.appendChild(item);
+        }
+    }
+
+    function addToCart(nazov) {
+        if (sklad[nazov].mnozstvo > 0) {
+            sklad[nazov].mnozstvo--;
+            kosik[nazov] = (kosik[nazov] || 0) + 1;
+            renderProducts();
+            renderCart();
+        }
+    }
+
+    function removeFromCart(nazov) {
+        if (kosik[nazov] > 0) {
+            kosik[nazov]--;
+            sklad[nazov].mnozstvo++;
+            if (kosik[nazov] === 0) delete kosik[nazov];
+            renderProducts();
+            renderCart();
+        }
+    }
+
+    function renderCart() {
+        const itemsList = document.getElementById('cart-items');
+        const emptyMsg = document.getElementById('cart-empty');
+        const summarySection = document.getElementById('cart-summary-section');
+        
+        itemsList.innerHTML = '';
+        const keys = Object.keys(kosik);
+        
+        if (keys.length === 0) {
+            emptyMsg.style.display = 'block';
+            summarySection.style.display = 'none';
+            return;
+        }
+        
+        emptyMsg.style.display = 'none';
+        summarySection.style.display = 'block';
+        
+        let baseSuma = 0;
+        
+        for (const [nazov, pocet] of Object.entries(kosik)) {
+            const cena = sklad[nazov].cena;
+            baseSuma += cena * pocet;
+            
+            const li = document.createElement('li');
+            li.className = 'cart-item';
+            li.innerHTML = `
+                <div>
+                    <span style="text-transform: capitalize; font-weight: 500;">${nazov}</span> 
+                    <span style="color: var(--text-muted);">(${pocet} ks)</span>
+                </div>
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <span>${(cena * pocet).toFixed(2)} €</span>
+                    <button class="btn" onclick="removeFromCart('${nazov}')" style="background: var(--danger); margin: 0; padding: 2px 8px; width: auto;">-</button>
+                </div>
+            `;
+            itemsList.appendChild(li);
+        }
+        
+        calculateTotals(baseSuma);
+    }
+
+    function calculateTotals(baseSuma) {
+        document.getElementById('base-price').innerText = baseSuma.toFixed(2) + ' EUR';
+        
+        let finalSuma = baseSuma;
+        if (hasDiscount) {
+            const zlava = baseSuma * 0.2;
+            finalSuma = baseSuma * 0.8;
+            document.getElementById('discount-row').style.display = 'flex';
+            document.getElementById('discount-val').innerText = '-' + zlava.toFixed(2) + ' EUR';
+        } else {
+            document.getElementById('discount-row').style.display = 'none';
+        }
+        
+        document.getElementById('final-price').innerText = finalSuma.toFixed(2) + ' EUR';
+    }
+
+    function applyCoupon() {
+        const val = document.getElementById('coupon-input').value.trim().toLowerCase();
+        if (val === 'ano' || val === 'zlava' || val === 'kupon') {
+            hasDiscount = true;
+            renderCart();
+            alert('20% zľava bola úspešne aplikovaná!');
+        } else {
+            alert('Neplatný kupón.');
+        }
+    }
+
+    function checkout() {
+        const receiptCard = document.getElementById('receipt-card');
+        const receiptItems = document.getElementById('receipt-items');
+        const receiptCategories = document.getElementById('receipt-categories');
+        const receiptSummary = document.getElementById('receipt-summary');
+        
+        receiptItems.innerHTML = '';
+        receiptCategories.innerHTML = '';
+        
+        let baseSuma = 0;
+        let totalItems = 0;
+        
+        for (const [nazov, pocet] of Object.entries(kosik)) {
+            const info = sklad[nazov];
+            const itemTotal = info.cena * pocet;
+            baseSuma += itemTotal;
+            totalItems += pocet;
+            
+            // Účet riadky
+            for(let i=0; i<pocet; i++) {
+                const li = document.createElement('li');
+                li.style.padding = '4px 0';
+                li.innerText = `${nazov} - ${info.cena.toFixed(2)} EUR, ${info.kategoria}`;
+                receiptItems.appendChild(li);
+            }
+            
+            // Rozdelenie potravín kategórie text
+            let katText = 'je nieco ine';
+            if (ovocie.includes(nazov)) katText = 'je ovocie';
+            else if (zelenina.includes(nazov)) katText = 'je zelenina';
+            else if (sladkosti.includes(nazov)) katText = 'je sladkost';
+            
+            for(let i=0; i<pocet; i++) {
+                const liKat = document.createElement('li');
+                liKat.innerText = `${nazov} ${katText}`;
+                receiptCategories.appendChild(liKat);
+            }
+        }
+        
+        let finalSuma = hasDiscount ? baseSuma * 0.8 : baseSuma;
+        
+        receiptSummary.innerHTML = `
+            <hr style="border:0; border-top: 1px dashed var(--border); margin: 10px 0;">
+            Pôvodná suma: ${baseSuma.toFixed(2)} EUR<br>
+            ${hasDiscount ? 'Aplikovaná zľava: 20%<br>' : ''}
+            Celkovo dokopy: ${finalSuma.toFixed(2)} EUR<br>
+            Počet položiek: ${totalItems}
+        `;
+        
+        receiptCard.style.display = 'block';
+        window.scrollTo({ top: receiptCard.offsetTop, behavior: 'smooth' });
+    }
+
+    function resetApp() {
+        kosik = {};
+        hasDiscount = false;
+        document.getElementById('coupon-input').value = '';
+        document.getElementById('receipt-card').style.display = 'none';
+        renderProducts();
+        renderCart();
+    }
+
+    // Inicializácia
+    renderProducts();
+</script>
+
+</body>
+</html>
