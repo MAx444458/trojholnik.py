@@ -266,7 +266,7 @@ nacitajKosik();
 """
 
 
-# API - SKLAD
+# API - SKLAD (Opravený preklep 'kcategoria' -> 'kategoria')
 @app.get("/api/sklad")
 def api_sklad():
 
@@ -358,7 +358,6 @@ def api_kupon(data: dict):
 # 🔒 ZABEZPEČENÝ ADMIN PANEL
 # =====================================================================
 
-# Funkcia, ktorá skontroluje, či si zadal správne meno a heslo Maxpol04
 def over_admina(credentials: HTTPBasicCredentials = Depends(security)):
     spravne_meno = secrets.compare_digest(credentials.username, "admin")
     spravne_heslo = secrets.compare_digest(credentials.password, "Maxpol04")
@@ -371,7 +370,6 @@ def over_admina(credentials: HTTPBasicCredentials = Depends(security)):
         )
     return credentials.username
 
-# Stránka /admin, ktorá sa otvorí až po správnom zadaní hesla
 @app.get("/admin", response_class=HTMLResponse)
 def admin_panel(prihlaseny_uzivatel: str = Depends(over_admina)):
     return """
@@ -405,4 +403,3 @@ button:hover { background: #4cae4c; }
 </body>
 </html>
 """
-
