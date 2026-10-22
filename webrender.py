@@ -9,7 +9,6 @@ Render – Start Command:
     uvicorn webrender:app --host 0.0.0.0 --port $PORT
 
 Obchod: /        Admin: /admin   (meno: admin, heslo: Maxpol04)
-Heslo si zmeň na Render v Environment: ESHOP_ADMIN_HESLO = tvoje_heslo
 """
 
 import json
@@ -28,8 +27,9 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 security = HTTPBasic()
 app = FastAPI()
 
-ADMIN_MENO = os.getenv("ESHOP_ADMIN_MENO", "admin")
-ADMIN_HESLO = os.getenv("ESHOP_ADMIN_HESLO", "Maxpol04")
+# 🔒 Prihlásenie do /admin
+ADMIN_MENO = "admin"
+ADMIN_HESLO = "Maxpol04"
 DATA_SUBOR = Path(__file__).with_name("data.json")   # sem sa ukladá sklad, kupóny a objednávky
 zamok = threading.RLock()
 
@@ -576,7 +576,7 @@ async function nacitajSklad() {
                     <div class="prod-title">${esc(p.nazov)}</div>
                     <div class="prod-meta">
                         <span class="cena">${eur(p.cena)}</span>
-                        <span class="prod-sklad ${p.mnozstvo > 0 ? "" : "vypredane"}">${p.mnozstvo > 0 ? "Sklad: " + p.mnozstvo + " ks" : "Vypredané"}</span>
+                        <span class="prod-sklad ${volne > 0 ? "" : "vypredane"}">${p.mnozstvo <= 0 ? "Vypredané" : "Sklad: " + volne + " ks"}</span>
                     </div>
                     ${volne > 0
                         ? `<div class="pridat"><input type="number" min="1" max="${volne}" value="1" aria-label="Počet kusov"><button data-pridat="${esc(p.nazov)}">🛒 Pridať do košíka</button></div>`
