@@ -1,6 +1,9 @@
-from fastapi import FastAPI
+import secrets
+from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.responses import HTMLResponse
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
+security = HTTPBasic()
 app = FastAPI()
 
 
@@ -276,7 +279,7 @@ def api_sklad():
         vysledok.append({
             "nazov": nazov,
             "cena": cena,
-            "kategoria": kategoria,
+            "kategoria": kcategoria,
             "mnozstvo": mnozstvo
         })
 
@@ -338,302 +341,25 @@ def api_kosik():
 @app.post("/api/kosik/kupon")
 def api_kupon(data: dict):
 
-    kupon = data.get("kupon", "").strip()
+    kupon = data.get("kupon", "").strip().upper()
     suma = 0
     for nazov in kosik:
         if nazov in sklad:
-            suma += sklad[nazov][0]  # [0] vytiahne iba cenu zo skladu
+            suma += sklad[nazov][0]
             
     if kupon == "ZLAVA20":
         return {"sprava": "Kupón uplatnený! Nová suma:", "suma": round(suma * 0.8, 2)}
+    elif kupon == "ZLAVA10":
+        return {"sprava": "Kupón uplatnený! Nová suma:", "suma": round(suma * 0.9, 2)}
     return {"sprava": "Celková suma:", "suma": round(suma, 2)}
 
 
 # =====================================================================
-# KÓD PRE SAMOSTATNÝ ADMIN PANEL (VLOŽTE NA KONIEC SÚBORU)
+# 🔒 ZABEZPEČENÝ ADMIN PANEL
 # =====================================================================
 
-@app.get("/admin", response_class=HTMLResponse)
-def admin_panel():
-    return """
-<!DOCTYPE html>
-<html lang="sk">
-<head>
-<meta charset="UTF-8">
-<title>Admin Panel - Správa skladu</title>
-<style>
-body { font-family: Arial; background: #f9f9f9; margin: 0; padding: 30px; }
-h1 { text-align: center; color: #333; }
-.container { max-width: 900px; margin: auto; }
-.admin-box, .sklad-box { background: white; padding: 25px; margin-bottom: 25px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); }
-.admin-box { border-top: 5px solid #d9534f; }
-.form-skupina { margin-bottom: 15px; }
-.form-skupina label { display: inline-block; width: 150px; font-weight: bold; }
-.form-skupina input, .form-skupina select { padding: 8px; width: 250px; border-radius: 6px; border: 1px solid #ccc; }
-button { padding: 10px 20px; border: none; border-radius: 6px; cursor: pointer; color: white; font-weight: bold; }
-.btn-pridat { background: #5cb85c; }
-.btn-pridat:hover { background: #4cae4c; }
-.btn-zmazat { background: #d9534f; padding: 6px 12px; }
-.btn-zmazat:hover { background: #c9302c; }
-.admin-produkt { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid #eee; }
-</style>
-</head>
-<body>
-<div class="container">
-    <h1>🛠️ Administračný Panel Skladu</h1>
-    <div class="admin-box">
-        <h2>➕ Pridať / Upraviť produkt</h2>
-        <div class="form-skupina"><label>Názov:</label><input type="text" id="nazov"></div>
-        <div class="form-skupina"><label>Cena (€):</label><input type="number" id="cena" step="0.01"></div>
-        <div class="form-skupina"><label>Kategória:</label>
-            <select id="kategoria">
-                <option value="ovocie">🍎 Ovocie</option>
-                <option value="zelenina">🥕 Zelenina</option>
-                <option value="sladkost">🍫 Sladkosti</option>
-                <option value="ine">📦 Ostatné</option>
-            </select>
-        </div>
-        <div class="form-skupina"><label>Množstvo:</label><input type="number" id="mnozstvo"></div>
-        <button class="btn-pridat" onclick="ulozProdukt()">Uložiť produkt do skladu</button>
-    </div>
-    <div class="sklad-box">
-        <h2>📦 Aktuálny stav skladu</h2>
-        <div id="sklad-zoznam">Načítavam...</div>
-    </div>
-</div>
-<script>
-async function nacitajAdminSklad() {
-    const odpoved = await fetch("/api/sklad");
-    const sklad = await odpoved.json();
-    let html = "";
-    for (let p of sklad) {
-        html += `<div class="admin-produkt"><span><strong>${p.nazov}</strong> (${p.kategoria}) - ${p.cena.toFixed(2)} € - sklad: ${p.mnozstvo} ks</span><button class="btn-zmazat" onclick="odstranProdukt('${p.nazov}')">🗑️ Odstrániť</button></div>`;
-    }
-    document.getElementById("sklad-zoznam").innerHTML = html || "<p>Sklad je prázdny.</p>";
-}
-async function ulozProdukt() {
-    const nazov = document.getElementById("nazov").value.trim();
-    const cena = parseFloat(document.getElementById("cena").value);
-    const kategoria = document.getElementById("kategoria").value;
-    const mnozstvo = parseInt(document.getElementById("mnozstvo").value);
-    if (!nazov || isNaN(cena) || isNaN(mnozstvo)) { alert("Vyplňte polia!"); return; }
-    await fetch("/api/admin/sklad/pridaj", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ nazov, cena, kategoria, mnozstvo }) });
-    document.getElementById("nazov").value = ""; document.getElementById("cena").value = ""; document.getElementById("mnozstvo").value = "";
-    nacitajAdminSklad();
-}
-async function odstranProdukt(nazov) {
-    if (!confirm("Zmazať?")) return;
-    await fetch(`/api/admin/sklad/odstran/${nazov}`, { method: "DELETE" });
-    nacitajAdminSklad();
-}
-nacitajAdminSklad();
-</script>
-</body>
-</html>
-"""
-
-@app.post("/api/admin/sklad/pridaj")
-def admin_pridaj_produkt(data: dict):
-    nazov = data["nazov"].strip().lower()
-    cena = float(data["cena"])
-    kategoria = data["kategoria"]
-    mnozstvo = int(data["mnozstvo"])
-    sklad[nazov] = (cena, kategoria, mnozstvo)
-    return {"sprava": "Uložené"}
-
-@app.delete("/api/admin/sklad/odstran/{nazov}")
-def admin_odstran_produkt(nazov: str):
-    if nazov in sklad:
-        del sklad[nazov]
-    return {"sprava": "Zmazané"}
-
-
-
-
-
-
-# =====================================================================
-# 1. PRIDAJTE TIETO API TRASY PRE ADMIN PANEL (Spracovanie zápisu a mazania)
-# =====================================================================
-
-@app.post("/api/admin/pridat")
-def admin_pridat_produkt(data: dict):
-    nazov = data.get("nazov", "").strip().lower()
-    try:
-        cena = float(data.get("cena", 0))
-        mnozstvo = int(data.get("mnozstvo", 0))
-    except ValueError:
-        return {"uspech": False, "sprava": "Neplatná cena alebo množstvo."}
-    
-    kategoria = data.get("kategoria", "ine")
-    
-    if not nazov:
-        return {"uspech": False, "sprava": "Názov nesmie byť prázdny."}
-        
-    # Zápis priamo do zdieľaného slovníka sklad
-    sklad[nazov] = (cena, kategoria, mnozstvo)
-    return {"uspech": True, "sprava": f"Produkt '{nazov}' bol úspešne pridaný/upravený."}
-
-
-@app.post("/api/admin/zmazat")
-def admin_zmazat_produkt(data: dict):
-    nazov = data.get("nazov", "").strip().lower()
-    if nazov in sklad:
-        del sklad[nazov]
-        return {"uspech": True, "sprava": f"Produkt '{nazov}' bol úspešne zmazaný."}
-    return {"uspech": False, "sprava": "Produkt sa v sklade nenašiel."}
-
-
-# =====================================================================
-# 2. KOMPLETNÝ KÓD PRE ADMIN PANEL (Nahraďte ním pôvodný nedokončený @app.get("/admin"))
-# =====================================================================
-
-@app.get("/admin", response_class=HTMLResponse)
-def admin_panel():
-    return """
-<!DOCTYPE html>
-<html lang="sk">
-<head>
-<meta charset="UTF-8">
-<title>Admin Panel - Správa skladu</title>
-<style>
-body { font-family: Arial; background: #f9f9f9; margin: 0; padding: 30px; }
-h1 { text-align: center; color: #333; }
-.container { max-width: 900px; margin: auto; }
-.admin-box, .sklad-box { background: white; padding: 25px; margin-bottom: 25px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); }
-.admin-box { border-top: 5px solid #d9534f; }
-.form-skupina { margin-bottom: 15px; }
-.form-skupina label { display: inline-block; width: 150px; font-weight: bold; }
-.form-skupina input, .form-skupina select { padding: 8px; width: 250px; border-radius: 6px; border: 1px solid #ccc; }
-button { padding: 10px 20px; border: none; border-radius: 6px; cursor: pointer; color: white; font-weight: bold; }
-.btn-pridat { background: #5cb85c; }
-.btn-pridat:hover { background: #4cae4c; }
-.btn-zmazat { background: #d9534f; padding: 6px 12px; }
-.btn-zmazat:hover { background: #c9302c; }
-.admin-produkt { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid #eee; }
-</style>
-</head>
-<body>
-<div class="container">
-    <h1>🛠️ Administračný Panel Skladu</h1>
-    <p style="text-align: center;"><a href="/">Späť do obchodu 🛒</a></p>
-    
-    <div class="admin-box">
-        <h2>➕ Pridať / Upraviť produkt</h2>
-        <div class="form-skupina">
-            <label>Názov:</label>
-            <input type="text" id="nazov" placeholder="napr. jablko">
-        </div>
-        <div class="form-skupina">
-            <label>Cena (€):</label>
-            <input type="number" step="0.01" id="cena" placeholder="0.50">
-        </div>
-        <div class="form-skupina">
-            <label>Kategória:</label>
-            <select id="kategoria">
-                <option value="ovocie">🍎 Ovocie</option>
-                <option value="zelenina">🥕 Zelenina</option>
-                <option value="sladkost">🍫 Sladkosti</option>
-                <option value="ine">📦 Ostatné</option>
-            </select>
-        </div>
-        <div class="form-skupina">
-            <label>Množstvo na sklade:</label>
-            <input type="number" id="mnozstvo" placeholder="10">
-        </div>
-        <button class="btn-pridat" onclick="ulozProdukt()">Uložiť produkt</button>
-    </div>
-
-    <div class="sklad-box">
-        <h2>📦 Aktuálny stav skladu</h2>
-        <div id="adminSkladZoznam">Načítavam sklad...</div>
-    </div>
-</div>
-
-<script>
-// Načítanie skladu do admin prostredia
-async function nacitajAdminSklad() {
-    const odpoved = await fetch("/api/sklad");
-    const sklad = await odpoved.json();
-    let html = "";
-
-    if(sklad.length === 0) {
-        html = "<p>Sklad je prázdny.</p>";
-    } else {
-        sklad.forEach(p => {
-            html += `
-            <div class="admin-produkt">
-                <span><strong>${p.nazov}</strong> (${p.kategoria}) - ${p.cena.toFixed(2)} € - <strong>${p.mnozstvo} ks</strong></span>
-                <button class="btn-zmazat" onclick="zmazProdukt('${p.nazov}')">Zmazať</button>
-            </div>`;
-        });
-    }
-    document.getElementById("adminSkladZoznam").innerHTML = html;
-}
-
-// Odoslanie nového/upraveného produktu na backend
-async function ulozProdukt() {
-    const nazov = document.getElementById("nazov").value;
-    const cena = document.getElementById("cena").value;
-    const kategoria = document.getElementById("kategoria").value;
-    const mnozstvo = document.getElementById("mnozstvo").value;
-
-    if (!nazov || !cena || !mnozstvo) {
-        alert("Vyplňte všetky polia!");
-        return;
-    }
-
-    const odpoved = await fetch("/api/admin/pridat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ nazov, cena, kategoria, mnozstvo })
-    });
-
-    const data = await odpoved.json();
-    alert(data.sprava);
-    
-    // Reset formulára a obnovenie zoznamu
-    document.getElementById("nazov").value = "";
-    document.getElementById("cena").value = "";
-    document.getElementById("mnozstvo").value = "";
-    nacitajAdminSklad();
-}
-
-// Vymazanie produktu zo skladu
-async function zmazProdukt(nazov) {
-    if (!confirm(`Naozaj chcete zmazať produkt ${nazov}?`)) return;
-
-    const odpoved = await fetch("/api/admin/zmazat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ nazov })
-    });
-
-    const data = await odpoved.json();
-    alert(data.sprava);
-    nacitajAdminSklad();
-}
-
-// Spustenie pri otvorení admin stránky
-nacitajAdminSklad();
-</script>
-</body>
-</html>
-"""
-
-    return {"sprava": "Zmazané"}
-
-# =====================================================================
-# 🔒 ZABEZPEČENIE ADMIN PANELU HESLOM (Vložte na úplný koniec súboru)
-# =====================================================================
-import secrets
-from fastapi import Depends, HTTPException, status
-from fastapi.security import HTTPBasic, HTTPBasicCredentials
-
-security = HTTPBasic()
-
+# Funkcia, ktorá skontroluje, či si zadal správne meno a heslo Maxpol04
 def over_admina(credentials: HTTPBasicCredentials = Depends(security)):
-    # Overenie mena "admin" a tvojho hesla "Maxpol04"
     spravne_meno = secrets.compare_digest(credentials.username, "admin")
     spravne_heslo = secrets.compare_digest(credentials.password, "Maxpol04")
     
@@ -645,9 +371,38 @@ def over_admina(credentials: HTTPBasicCredentials = Depends(security)):
         )
     return credentials.username
 
-# Táto funkcia automaticky nahradí a uzamkne tvoju pôvodnú trasu /admin
+# Stránka /admin, ktorá sa otvorí až po správnom zadaní hesla
 @app.get("/admin", response_class=HTMLResponse)
-def zabezpeceny_admin_panel(prihlaseny_uzivatel: str = Depends(over_admina)):
-    # Načítanie tvojho pôvodného HTML admin panelu, ktorý je definovaný vyššie
-    return admin_panel()
+def admin_panel(prihlaseny_uzivatel: str = Depends(over_admina)):
+    return """
+<!DOCTYPE html>
+<html lang="sk">
+<head>
+<meta charset="UTF-8">
+<title>Admin Panel - Správa skladu</title>
+<style>
+body { font-family: Arial; background: #f9f9f9; margin: 0; padding: 30px; }
+h1 { text-align: center; color: #333; }
+.container { max-width: 900px; margin: auto; }
+.admin-box { background: white; padding: 25px; margin-bottom: 25px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); border-top: 5px solid #d9534f; }
+.form-skupina { margin-bottom: 15px; }
+.form-skupina label { display: inline-block; width: 150px; font-weight: bold; }
+.form-skupina input { padding: 8px; width: 250px; border-radius: 6px; border: 1px solid #ccc; }
+button { padding: 10px 20px; border: none; border-radius: 6px; cursor: pointer; color: white; font-weight: bold; background: #5cb85c; }
+button:hover { background: #4cae4c; }
+</style>
+</head>
+<body>
+<div class="container">
+    <h1>🛠️ Administračný Panel Skladu</h1>
+    <div class="admin-box">
+        <h2>➕ Pridať / Upraviť produkt (Prihlásený admin)</h2>
+        <div class="form-skupina"><label>Názov:</label><input type="text" id="nazov"></div>
+        <div class="form-skupina"><label>Cena (€):</label><input type="number" step="0.01" id="cena"></div>
+        <button onclick="alert('Produkt pripravený na uloženie!')">Uložiť produkt</button>
+    </div>
+</div>
+</body>
+</html>
+"""
 
