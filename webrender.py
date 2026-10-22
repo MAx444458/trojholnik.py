@@ -403,3 +403,86 @@ button:hover { background: #4cae4c; }
 </body>
 </html>
 """
+
+# =====================================================================
+# 🎨 GRAFICKÉ VYLEPŠENIE & OBRÁZKY (Vložte na úplný koniec súboru)
+# =====================================================================
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
+from fastapi.responses import Response
+
+# Automatická databáza fotiek z Unsplash pre tvoj zoznam potravín
+FOTKY_PRODUKTOV = {
+    "jablko": "https://unsplash.com",
+    "banan": "https://unsplash.com",
+    "hruska": "https://unsplash.com",
+    "slivka": "https://unsplash.com",
+    "pomaranc": "https://unsplash.com",
+    "broskyna": "https://unsplash.com",
+    "mrkva": "https://unsplash.com",
+    "zemiak": "https://unsplash.com",
+    "petrzlen": "https://unsplash.com",
+    "celer": "https://unsplash.com",
+    "cokolada": "https://unsplash.com",
+    "cukor": "https://unsplash.com",
+    "mlieko": "https://unsplash.com",
+    "chlieb": "https://unsplash.com"
+}
+
+# Middleware, ktorý za behu upraví staré HTML na moderný dizajn s obrázkami
+@app.middleware("http")
+async def vylepsi_grafiku_a_obrazky(request, call_next):
+    response = await call_next(request)
+    if request.url.path == "/" and response.status_code == 200:
+        body = b"".join([chunk async for chunk in response.body_iterator])
+        html = body.decode("utf-8")
+        
+        # 1. Výmena starého CSS za moderný responzívny Grid dizajn
+        stary_style = "<style\(>\nbody {\n    font-family: Arial;\n    background: #f2f2f2;\n    margin: 0;\n    padding: 30px;\n}\\)n\nh1 {\n    text-align: center;\n}\n\n.container {\n    max-width: 1000px;\n    margin: auto;\n}\n\n.kategoria {\n    background: white;\n    padding: 20px;\n    margin-bottom: 20px;\n    border-radius: 12px;\n}\n\n.produkt {\n    display: flex;\n    justify-content: space-between;\n    align-items: center;\n    padding: 12px;\n    border-bottom: 1px solid #ddd;\n}\n\(\nbutton {\n    padding: 8px 15px;\n    border: none;\n    border-radius: 7px;\n    cursor: pointer; background: #222;\n    color: white;\n}\\)n\nbutton:hover {\n    background: #555;\n}..."
+        
+        novy_style = """<style>
+        body { font-family: 'Segoe UI', Roboto, Arial, sans-serif; background: #f1f5f9; padding: 30px; color: #1e293b; }
+        h1 { font-size: 2.5rem; font-weight: 800; margin-bottom: 30px; }
+        .kategoria { background: transparent; padding: 0; margin-bottom: 40px; }
+        .kategoria h2 { font-size: 1.5rem; border-left: 5px solid #3b82f6; padding-left: 10px; margin-bottom: 20px; }
+        #produkty { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 20px; margin-bottom: 30px; }
+        .produkt { background: white; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); display: flex; flex-direction: column; padding: 0; border: none; transition: transform 0.2s, box-shadow 0.2s; }
+        .produkt:hover { transform: translateY(-5px); box-shadow: 0 10px 15px -3px rgba(0,0,0,0.1); }
+        .prod-img { width: 100%; height: 150px; object-fit: cover; background: #cbd5e1; }
+        .prod-info { padding: 15px; display: flex; flex-direction: column; flex-grow: 1; }
+        .prod-title { font-weight: 600; font-size: 1.1rem; margin-bottom: 10px; text-transform: capitalize; }
+        .prod-meta { display: flex; justify-content: space-between; align-items: center; margin-top: auto; }
+        .cena { color: #3b82f6; font-size: 1.2rem; font-weight: 700; }
+        .prod-sklad { font-size: 0.85rem; color: #64748b; }
+        button { width: 100%; margin-top: 12px; padding: 10px; border: none; border-radius: 8px; font-weight: 600; cursor: pointer; background: #3b82f6; color: white; transition: background 0.2s; }
+        button:hover { background: #2563eb; }
+        #kosik { background: white; padding: 25px; border-radius: 16px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); }
+        </style>"""
+        
+        # 2. Vstreknutie obrázkov do JavaScriptu, ktorý vykresľuje zoznam produktov
+        stary_javascript_loop = 'if (produkt.kategoria == kat) {\n\n                html += `\n                <div class="produkt">\n                    <span>\n                        ${produkt.nazov}\n                        -\n                        <span class="cena">${produkt.cena.toFixed(2)} €</span>\n                        -\n                        sklad: ${produkt.mnozstvo} ks\n                    </span>\n\n                    <button onclick="pridaj(\'${produkt.nazov}\')">\n                        Pridať\n                    </button>\n                </div>`;\n            }'
+        
+        novy_javascript_loop = """
+        if (produkt.kategoria == kat) {
+            const fotky = """ + str(FOTKY_PRODUKTOV) + """;
+            const imgUrl = fotky[produkt.nazov] || "https://unsplash.com";
+            html += `
+            <div class="produkt">
+                <img src="${imgUrl}" class="prod-img" alt="${produkt.nazov}">
+                <div class="prod-info">
+                    <div class="prod-title">${produkt.nazov}</div>
+                    <div class="prod-meta">
+                        <span class="cena">${produkt.cena.toFixed(2)} €</span>
+                        <span class="prod-sklad">Sklad: ${produkt.mnozstvo} ks</span>
+                    </div>
+                    <button onclick="pridaj('${produkt.nazov}')">🛒 Pridať do košíka</button>
+                </div>
+            </div>`;
+        }"""
+        
+        # Aplikovanie zmien do výsledného HTML kódu
+        html = html.replace("</head>", novy_style + "\n</head>")
+        html = html.replace(stary_javascript_loop, novy_javascript_loop)
+        
+        return Response(content=html, media_type="text/html")
+    return response
+
