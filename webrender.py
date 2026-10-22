@@ -1,8 +1,3 @@
-import secrets
-from fastapi import FastAPI, Depends, HTTPException, status
-from fastapi.responses import HTMLResponse
-from fastapi.security import HTTPBasic, HTTPBasicCredentials
-
 """
 E-SHOP – FastAPI + SQLite
 =========================
