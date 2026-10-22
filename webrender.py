@@ -1,9 +1,3 @@
-https://trojholnik-py.onrender.com
-
-
-
-
-
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 
@@ -628,3 +622,32 @@ nacitajAdminSklad();
 """
 
     return {"sprava": "Zmazané"}
+
+# =====================================================================
+# 🔒 ZABEZPEČENIE ADMIN PANELU HESLOM (Vložte na úplný koniec súboru)
+# =====================================================================
+import secrets
+from fastapi import Depends, HTTPException, status
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
+
+security = HTTPBasic()
+
+def over_admina(credentials: HTTPBasicCredentials = Depends(security)):
+    # Overenie mena "admin" a tvojho hesla "Maxpol04"
+    spravne_meno = secrets.compare_digest(credentials.username, "admin")
+    spravne_heslo = secrets.compare_digest(credentials.password, "Maxpol04")
+    
+    if not (spravne_meno and spravne_heslo):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Nesprávne prístupové údaje!",
+            headers={"WWW-Authenticate": "Basic"},
+        )
+    return credentials.username
+
+# Táto funkcia automaticky nahradí a uzamkne tvoju pôvodnú trasu /admin
+@app.get("/admin", response_class=HTMLResponse)
+def zabezpeceny_admin_panel(prihlaseny_uzivatel: str = Depends(over_admina)):
+    # Načítanie tvojho pôvodného HTML admin panelu, ktorý je definovaný vyššie
+    return admin_panel()
+
