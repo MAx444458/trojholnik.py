@@ -1,90 +1,155 @@
 """
-E-SHOP (FastAPI)
+E-SHOP (FastAPI + PostgreSQL)
 
-Spustenie na počítači:
-    pip install fastapi uvicorn
-    uvicorn webrender:app --reload
+Render – nastavenie web služby:
+    Build Command:  pip install -r requirements.txt
+    Start Command:  uvicorn webrender:app --host 0.0.0.0 --port $PORT
+    Environment:    DATABASE_URL = Internal Database URL z Render Postgres
+                    ADMIN_HESLO  = heslo do /admin (meno je: admin)
 
-Render – Start Command:
-    uvicorn webrender:app --host 0.0.0.0 --port $PORT
+Obchod: /        Admin: /admin
 
-Obchod: /        Admin: /admin   (meno: admin, heslo: Maxpol04)
+DOMÁCA ÚLOHA – kde čo nájdeš:
+
+[Databáza]
+    Produkty, zľavové kódy a objednávky sú v PostgreSQL (tabuľky produkty, kupony,
+    objednavky). Databáza beží na Render ako samostatná služba, takže dáta prežijú
+    reštart, uspatie servera aj nový deploy z GitHubu. Tabuľky sa vytvoria samé
+    pri prvom spustení (funkcia priprav_databazu).
+
+[Bezpečnosť]
+    SQL injection – každý SQL príkaz posiela hodnoty cez parametre %s, nikdy nie
+                    cez f-string. Databáza ich berie len ako dáta, nie ako príkaz.
+    XSS           – všetko, čo sa vypisuje do stránky, prejde funkciou esc()
+                    (v JavaScripte), obrázok musí byť odkaz https://, a hlavička
+                    Content-Security-Policy dovolí spustiť iba naše vlastné skripty.
+    Heslo         – nie je v kóde (GitHub je verejný), je v Environment na Render.
+                    Porovnáva sa cez secrets.compare_digest.
+    CSRF          – POST požiadavka musí mať hlavičku X-Requested-With, ktorú
+                    cudzia stránka poslať nevie (funkcia bezpecnost).
+    Vstupy        – cena, počet kusov, názvy a kódy sa kontrolujú na serveri.
+    HTTPS         – Render ho zapína automaticky, hlavička HSTS ho vynúti.
 """
 
-import json
+import base64
+import hashlib
 import os
 import re
 import secrets
 import threading
 from datetime import datetime
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
-from pathlib import Path
 
+import psycopg
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
+from psycopg.rows import dict_row
+from psycopg.types.json import Jsonb
 
 security = HTTPBasic()
-app = FastAPI()
+app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 
-# 🔒 Prihlásenie do /admin
+DATABASE_URL = os.environ.get("DATABASE_URL")
 ADMIN_MENO = "admin"
-ADMIN_HESLO = "Maxpol04"
-DATA_SUBOR = Path(__file__).with_name("data.json")   # sem sa ukladá sklad, kupóny a objednávky
+ADMIN_HESLO = os.environ.get("ADMIN_HESLO")   # 🔒 heslo je na Render v Environment, nie v kóde
 zamok = threading.RLock()
 
-# SKLAD (názov: cena v €, kategória, počet kusov, obrázok)
-sklad = {
-    "jablko": {"cena": 0.5, "kategoria": "ovocie", "mnozstvo": 10, "obrazok": "https://images.unsplash.com/photo-1560806887-1e4cd0b6cbd6?w=400"},
-    "banan": {"cena": 1.2, "kategoria": "ovocie", "mnozstvo": 5, "obrazok": "https://images.unsplash.com/photo-1571771894821-ce9b6c11b08e?w=400"},
-    "hruska": {"cena": 0.8, "kategoria": "ovocie", "mnozstvo": 7, "obrazok": "https://images.unsplash.com/photo-1514756331096-242fdeb70d4a?w=400"},
-    "slivka": {"cena": 0.3, "kategoria": "ovocie", "mnozstvo": 8, "obrazok": "https://images.unsplash.com/photo-1603186741832-73602d33486c?w=400"},
-    "pomaranc": {"cena": 0.6, "kategoria": "ovocie", "mnozstvo": 6, "obrazok": "https://images.unsplash.com/photo-1547514701-42782101795e?w=400"},
-    "broskyna": {"cena": 0.9, "kategoria": "ovocie", "mnozstvo": 5, "obrazok": "https://images.unsplash.com/photo-1595124256660-bf968b820c54?w=400"},
-    "mrkva": {"cena": 0.4, "kategoria": "zelenina", "mnozstvo": 10, "obrazok": "https://images.unsplash.com/photo-1598170845058-32b9d6a5da37?w=400"},
-    "zemiak": {"cena": 0.2, "kategoria": "zelenina", "mnozstvo": 20, "obrazok": "https://images.unsplash.com/photo-1518977676601-b53f82aba655?w=400"},
-    "petrzlen": {"cena": 0.5, "kategoria": "zelenina", "mnozstvo": 5, "obrazok": "https://images.unsplash.com/photo-1587334206596-f947e90956f1?w=400"},
-    "celer": {"cena": 0.7, "kategoria": "zelenina", "mnozstvo": 3, "obrazok": "https://images.unsplash.com/photo-1628155930542-3c7a64e2c833?w=400"},
-    "cokolada": {"cena": 1.5, "kategoria": "sladkost", "mnozstvo": 4, "obrazok": "https://images.unsplash.com/photo-1511381939415-e44015466834?w=400"},
-    "cukor": {"cena": 1.0, "kategoria": "sladkost", "mnozstvo": 6, "obrazok": "https://images.unsplash.com/photo-1581447101798-2fa5bbd33c8b?w=400"},
-    "mlieko": {"cena": 1.3, "kategoria": "ine", "mnozstvo": 5, "obrazok": "https://images.unsplash.com/photo-1550583724-b2692b85b150?w=400"},
-    "chlieb": {"cena": 2.0, "kategoria": "ine", "mnozstvo": 8, "obrazok": "https://images.unsplash.com/photo-1509440159596-0249088772ff?w=400"},
-}
+# Pôvodný sklad – vloží sa do databázy iba pri úplne prvom spustení
+POCIATOCNY_SKLAD = [
+    # názov, cena, kategória, počet kusov, obrázok
+    ("jablko", 0.5, "ovocie", 10, "https://images.unsplash.com/photo-1560806887-1e4cd0b6cbd6?w=400"),
+    ("banan", 1.2, "ovocie", 5, "https://images.unsplash.com/photo-1571771894821-ce9b6c11b08e?w=400"),
+    ("hruska", 0.8, "ovocie", 7, "https://images.unsplash.com/photo-1514756331096-242fdeb70d4a?w=400"),
+    ("slivka", 0.3, "ovocie", 8, "https://images.unsplash.com/photo-1603186741832-73602d33486c?w=400"),
+    ("pomaranc", 0.6, "ovocie", 6, "https://images.unsplash.com/photo-1547514701-42782101795e?w=400"),
+    ("broskyna", 0.9, "ovocie", 5, "https://images.unsplash.com/photo-1595124256660-bf968b820c54?w=400"),
+    ("mrkva", 0.4, "zelenina", 10, "https://images.unsplash.com/photo-1598170845058-32b9d6a5da37?w=400"),
+    ("zemiak", 0.2, "zelenina", 20, "https://images.unsplash.com/photo-1518977676601-b53f82aba655?w=400"),
+    ("petrzlen", 0.5, "zelenina", 5, "https://images.unsplash.com/photo-1587334206596-f947e90956f1?w=400"),
+    ("celer", 0.7, "zelenina", 3, "https://images.unsplash.com/photo-1628155930542-3c7a64e2c833?w=400"),
+    ("cokolada", 1.5, "sladkost", 4, "https://images.unsplash.com/photo-1511381939415-e44015466834?w=400"),
+    ("cukor", 1.0, "sladkost", 6, "https://images.unsplash.com/photo-1581447101798-2fa5bbd33c8b?w=400"),
+    ("mlieko", 1.3, "ine", 5, "https://images.unsplash.com/photo-1550583724-b2692b85b150?w=400"),
+    ("chlieb", 2.0, "ine", 8, "https://images.unsplash.com/photo-1509440159596-0249088772ff?w=400"),
+]
 
-kupony = {"ZLAVA10": 10, "ZLAVA20": 20}   # kód: zľava v %
-objednavky = []
-kosiky = {}   # každý zákazník má vlastný košík: id -> {"polozky": {názov: kusy}, "kupon": kód}
+kosiky = {}   # košíky zákazníkov (v pamäti): id -> {"polozky": {názov: kusy}, "kupon": kód}
+
+
+# =====================================================================
+# DATABÁZA (PostgreSQL)
+# =====================================================================
+
+def db():
+    """Spojenie s databázou. Použitie:  with db() as con: ...
+    Na konci bloku sa zmeny uložia (COMMIT). Pri chybe sa všetko vráti späť (ROLLBACK)."""
+    if not DATABASE_URL:
+        raise RuntimeError("Chýba DATABASE_URL – nastav ju na Render v Environment.")
+    return psycopg.connect(DATABASE_URL, row_factory=dict_row)
+
+
+def priprav_databazu():
+    """Vytvorí tabuľky (ak ešte nie sú) a pri prvom spustení do nich vloží pôvodný sklad."""
+    with db() as con:
+        prve_spustenie = con.execute("SELECT to_regclass('produkty') IS NULL AS nova").fetchone()["nova"]
+
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS produkty (
+                nazov     TEXT PRIMARY KEY,
+                cena      NUMERIC(10, 2) NOT NULL CHECK (cena >= 0),
+                kategoria TEXT NOT NULL,
+                mnozstvo  INTEGER NOT NULL CHECK (mnozstvo >= 0),
+                obrazok   TEXT NOT NULL DEFAULT ''
+            )""")
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS kupony (
+                kod      TEXT PRIMARY KEY,
+                percenta INTEGER NOT NULL CHECK (percenta BETWEEN 1 AND 100)
+            )""")
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS objednavky (
+                cislo   SERIAL PRIMARY KEY,
+                cas     TEXT NOT NULL,
+                meno    TEXT NOT NULL,
+                telefon TEXT NOT NULL,
+                adresa  TEXT NOT NULL,
+                polozky JSONB NOT NULL,
+                suma    NUMERIC(10, 2) NOT NULL,
+                kupon   TEXT,
+                zlava   NUMERIC(10, 2) NOT NULL,
+                spolu   NUMERIC(10, 2) NOT NULL
+            )""")
+
+        if prve_spustenie:
+            for nazov, cena, kategoria, mnozstvo, obrazok in POCIATOCNY_SKLAD:
+                con.execute(
+                    "INSERT INTO produkty (nazov, cena, kategoria, mnozstvo, obrazok) VALUES (%s, %s, %s, %s, %s)",
+                    (nazov, cena, kategoria, mnozstvo, obrazok),
+                )
+            con.execute("INSERT INTO kupony (kod, percenta) VALUES (%s, %s), (%s, %s)", ("ZLAVA10", 10, "ZLAVA20", 20))
+
+
+def nacitaj_sklad(con):
+    """Všetky produkty z databázy ako slovník {názov: {cena, kategoria, mnozstvo, obrazok}}."""
+    riadky = con.execute("SELECT nazov, cena, kategoria, mnozstvo, obrazok FROM produkty ORDER BY nazov").fetchall()
+    return {
+        r["nazov"]: {"cena": float(r["cena"]), "kategoria": r["kategoria"], "mnozstvo": r["mnozstvo"], "obrazok": r["obrazok"]}
+        for r in riadky
+    }
+
+
+def nacitaj_kupony(con):
+    """Zľavové kódy z databázy ako slovník {kód: percentá}."""
+    return {r["kod"]: r["percenta"] for r in con.execute("SELECT kod, percenta FROM kupony ORDER BY kod").fetchall()}
+
+
+priprav_databazu()
 
 
 # =====================================================================
 # POMOCNÉ FUNKCIE
 # =====================================================================
-
-def uloz():
-    """Uloží sklad, kupóny a objednávky do data.json (prežijú reštart servera)."""
-    try:
-        DATA_SUBOR.write_text(
-            json.dumps({"sklad": sklad, "kupony": kupony, "objednavky": objednavky}, ensure_ascii=False, indent=1),
-            encoding="utf-8",
-        )
-    except OSError:
-        pass
-
-
-def nacitaj():
-    if not DATA_SUBOR.exists():
-        return
-    try:
-        d = json.loads(DATA_SUBOR.read_text(encoding="utf-8"))
-        sklad.clear(); sklad.update(d["sklad"])
-        kupony.clear(); kupony.update(d["kupony"])
-        objednavky[:] = d["objednavky"]
-    except (OSError, ValueError, KeyError):
-        pass
-
-
-nacitaj()
-
 
 def eura(x) -> Decimal:
     """Zaokrúhli sumu na 2 desatinné miesta (0,005 -> 0,01)."""
@@ -125,6 +190,8 @@ def teraz():
 
 # 🔒 Overenie prihlasovacieho mena a hesla
 def over_admina(credentials: HTTPBasicCredentials = Depends(security)):
+    if not ADMIN_HESLO:
+        chyba("Admin je vypnutý: na Render nastav v Environment premennú ADMIN_HESLO.", 503)
     spravne_meno = secrets.compare_digest(credentials.username.encode(), ADMIN_MENO.encode())
     spravne_heslo = secrets.compare_digest(credentials.password.encode(), ADMIN_HESLO.encode())
     if not (spravne_meno and spravne_heslo):
@@ -134,6 +201,19 @@ def over_admina(credentials: HTTPBasicCredentials = Depends(security)):
             headers={"WWW-Authenticate": "Basic"},
         )
     return credentials.username
+
+
+# 🛡️ Bezpečnostná kontrola každej požiadavky
+@app.middleware("http")
+async def bezpecnost(request: Request, call_next):
+    # CSRF: naše stránky posielajú hlavičku X-Requested-With. Cudzia stránka ju poslať nevie,
+    # takže POST z cudzej stránky (napr. pokus zmazať produkt cez tvoj prehliadač) odmietneme.
+    if request.method == "POST" and request.headers.get("x-requested-with") != "eshop":
+        return JSONResponse({"detail": "Neplatná požiadavka."}, status_code=403)
+    odpoved = await call_next(request)
+    for nazov, hodnota in BEZPECNOSTNE_HLAVICKY.items():
+        odpoved.headers[nazov] = hodnota
+    return odpoved
 
 
 # 🛒 Košík zákazníka (podľa cookie, aby mal každý svoj)
@@ -151,7 +231,9 @@ def ziskaj_kosik(request: Request, response: Response):
     return kosik
 
 
-def stav_kosika(kosik):
+def stav_kosika(kosik, con):
+    sklad = nacitaj_sklad(con)
+    kupony = nacitaj_kupony(con)
     polozky, suma, upozornenia = [], Decimal("0"), []
     for nazov, kusy in list(kosik["polozky"].items()):
         p = sklad.get(nazov)
@@ -195,15 +277,15 @@ def domov():
 # API - SKLAD
 @app.get("/api/sklad")
 def api_sklad():
-    with zamok:
-        return [{"nazov": nazov, **udaje} for nazov, udaje in sklad.items()]
+    with db() as con:
+        return [{"nazov": nazov, **udaje} for nazov, udaje in nacitaj_sklad(con).items()]
 
 
 # API - KOŠÍK
 @app.get("/api/kosik")
 def api_kosik(kosik: dict = Depends(ziskaj_kosik)):
-    with zamok:
-        return stav_kosika(kosik)
+    with zamok, db() as con:
+        return stav_kosika(kosik, con)
 
 
 # API - PRIDANIE DO KOŠÍKA (aj viac kusov naraz)
@@ -211,17 +293,18 @@ def api_kosik(kosik: dict = Depends(ziskaj_kosik)):
 def pridaj_do_kosika(data: dict, kosik: dict = Depends(ziskaj_kosik)):
     nazov = str(data.get("nazov", ""))
     kusy = cele_cislo(data.get("kusy", 1), "Počet kusov", 1, 999)
-    with zamok:
-        if nazov not in sklad:
+    with zamok, db() as con:
+        p = con.execute("SELECT mnozstvo FROM produkty WHERE nazov = %s", (nazov,)).fetchone()
+        if not p:
             chyba("Produkt neexistuje.", 404)
-        na_sklade = sklad[nazov]["mnozstvo"]
+        na_sklade = p["mnozstvo"]
         v_kosiku = kosik["polozky"].get(nazov, 0)
         if na_sklade <= 0:
             chyba("Produkt je vypredaný.")
         if v_kosiku + kusy > na_sklade:
             chyba(f"Na sklade je len {na_sklade} ks (v košíku už máš {v_kosiku} ks).")
         kosik["polozky"][nazov] = v_kosiku + kusy
-        vysledok = stav_kosika(kosik)
+        vysledok = stav_kosika(kosik, con)
     vysledok["sprava"] = f"{nazov} ({kusy} ks) bol pridaný do košíka."
     return vysledok
 
@@ -231,28 +314,30 @@ def pridaj_do_kosika(data: dict, kosik: dict = Depends(ziskaj_kosik)):
 def nastav_kusy(data: dict, kosik: dict = Depends(ziskaj_kosik)):
     nazov = str(data.get("nazov", ""))
     kusy = cele_cislo(data.get("kusy", 0), "Počet kusov", 0, 999)
-    with zamok:
+    with zamok, db() as con:
         if kusy == 0:
             kosik["polozky"].pop(nazov, None)
         else:
-            if nazov not in sklad:
+            p = con.execute("SELECT mnozstvo FROM produkty WHERE nazov = %s", (nazov,)).fetchone()
+            if not p:
                 chyba("Produkt neexistuje.", 404)
-            if kusy > sklad[nazov]["mnozstvo"]:
-                chyba(f"Na sklade je len {sklad[nazov]['mnozstvo']} ks.")
+            if kusy > p["mnozstvo"]:
+                chyba(f"Na sklade je len {p['mnozstvo']} ks.")
             kosik["polozky"][nazov] = kusy
-        return stav_kosika(kosik)
+        return stav_kosika(kosik, con)
 
 
 # API - KUPÓN (prázdny kód = zrušiť kupón)
 @app.post("/api/kosik/kupon")
 def api_kupon(data: dict, kosik: dict = Depends(ziskaj_kosik)):
     kod = str(data.get("kupon", "")).strip().upper()
-    with zamok:
-        if kod and kod not in kupony:
+    with zamok, db() as con:
+        kupon = con.execute("SELECT percenta FROM kupony WHERE kod = %s", (kod,)).fetchone()
+        if kod and not kupon:
             chyba("Neplatný zľavový kód.")
         kosik["kupon"] = kod or None
-        vysledok = stav_kosika(kosik)
-        vysledok["sprava"] = f"Kupón {kod} (-{kupony[kod]} %) uplatnený!" if kod else "Kupón bol zrušený."
+        vysledok = stav_kosika(kosik, con)
+    vysledok["sprava"] = f"Kupón {kod} (-{kupon['percenta']} %) uplatnený!" if kod else "Kupón bol zrušený."
     return vysledok
 
 
@@ -267,22 +352,30 @@ def objednat(data: dict, kosik: dict = Depends(ziskaj_kosik)):
     if len(adresa) < 5:
         chyba("Zadaj adresu doručenia.")
     with zamok:
-        stav = stav_kosika(kosik)
-        if stav["upozornenia"]:
-            chyba("Košík sa medzitým zmenil (sklad). Skontroluj ho a objednaj znova.", 409)
-        if not stav["polozky"]:
-            chyba("Košík je prázdny.")
-        for p in stav["polozky"]:
-            sklad[p["nazov"]]["mnozstvo"] -= p["kusy"]
-        cislo = objednavky[-1]["cislo"] + 1 if objednavky else 1
-        objednavky.append({
-            "cislo": cislo, "cas": teraz(), "meno": meno, "telefon": telefon, "adresa": adresa,
-            "polozky": [{"nazov": p["nazov"], "cena": p["cena"], "kusy": p["kusy"]} for p in stav["polozky"]],
-            "suma": stav["suma"], "kupon": stav["kupon"], "zlava": stav["zlava"], "spolu": stav["spolu"],
-        })
+        with db() as con:
+            stav = stav_kosika(kosik, con)
+            if stav["upozornenia"]:
+                chyba("Košík sa medzitým zmenil (sklad). Skontroluj ho a objednaj znova.", 409)
+            if not stav["polozky"]:
+                chyba("Košík je prázdny.")
+            for p in stav["polozky"]:
+                # odpočet zo skladu – podmienka "mnozstvo >= %s" zaručí, že sklad nikdy nepôjde do mínusu
+                zmena = con.execute(
+                    "UPDATE produkty SET mnozstvo = mnozstvo - %s WHERE nazov = %s AND mnozstvo >= %s",
+                    (p["kusy"], p["nazov"], p["kusy"]),
+                )
+                if zmena.rowcount != 1:
+                    chyba(f"{p['nazov']} sa medzitým vypredal. Skontroluj košík.", 409)   # → ROLLBACK
+            cislo = con.execute(
+                """INSERT INTO objednavky (cas, meno, telefon, adresa, polozky, suma, kupon, zlava, spolu)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING cislo""",
+                (teraz(), meno, telefon, adresa,
+                 Jsonb([{"nazov": p["nazov"], "cena": p["cena"], "kusy": p["kusy"]} for p in stav["polozky"]]),
+                 stav["suma"], stav["kupon"], stav["zlava"], stav["spolu"]),
+            ).fetchone()["cislo"]
+        # objednávka je uložená v databáze → vyprázdnime košík
         kosik["polozky"].clear()
         kosik["kupon"] = None
-        uloz()
     return {"cislo": cislo, "spolu": stav["spolu"]}
 
 
@@ -297,11 +390,15 @@ def admin_panel(prihlaseny_uzivatel: str = Depends(over_admina)):
 
 @app.get("/api/admin/data")
 def admin_data(u: str = Depends(over_admina)):
-    with zamok:
+    with db() as con:
+        objednavky = con.execute("SELECT * FROM objednavky ORDER BY cislo DESC LIMIT 200").fetchall()
         return {
-            "sklad": [{"nazov": n, **p} for n, p in sklad.items()],
-            "kupony": [{"kod": k, "percenta": v} for k, v in kupony.items()],
-            "objednavky": list(reversed(objednavky)),
+            "sklad": [{"nazov": n, **p} for n, p in nacitaj_sklad(con).items()],
+            "kupony": [{"kod": k, "percenta": v} for k, v in nacitaj_kupony(con).items()],
+            "objednavky": [
+                {**o, "suma": float(o["suma"]), "zlava": float(o["zlava"]), "spolu": float(o["spolu"])}
+                for o in objednavky
+            ],
         }
 
 
@@ -316,33 +413,40 @@ def admin_uloz_produkt(data: dict, u: str = Depends(over_admina)):
     kategoria = str(data.get("kategoria", "ine")).strip().lower()[:30] or "ine"
     mnozstvo = cele_cislo(data.get("mnozstvo", 0), "Počet kusov", 0, 100000)
     obrazok = str(data.get("obrazok", "")).strip()[:500]
-    if obrazok and not obrazok.startswith(("http://", "https://")):
-        chyba("Obrázok musí byť odkaz, ktorý začína https://")
-    with zamok:
-        if povodny and povodny not in sklad:
+    if obrazok and not obrazok.startswith("https://"):
+        chyba("Obrázok musí byť odkaz, ktorý začína https://")   # zabráni napr. javascript: odkazom (XSS)
+    with zamok, db() as con:
+        existuje = lambda n: con.execute("SELECT 1 FROM produkty WHERE nazov = %s", (n,)).fetchone() is not None
+        if povodny and not existuje(povodny):
             chyba("Upravovaný produkt už neexistuje.", 404)
-        if nazov != povodny and nazov in sklad:
+        if nazov != povodny and existuje(nazov):
             chyba("Produkt s takým názvom už existuje.")
-        if povodny and povodny != nazov:   # premenovanie – presunie sa aj v košíkoch
-            del sklad[povodny]
-            for k in kosiky.values():
-                if povodny in k["polozky"]:
-                    k["polozky"][nazov] = k["polozky"].pop(povodny)
-        sklad[nazov] = {"cena": cena, "kategoria": kategoria, "mnozstvo": mnozstvo, "obrazok": obrazok}
-        uloz()
+        if povodny:
+            con.execute(
+                "UPDATE produkty SET nazov = %s, cena = %s, kategoria = %s, mnozstvo = %s, obrazok = %s WHERE nazov = %s",
+                (nazov, cena, kategoria, mnozstvo, obrazok, povodny),
+            )
+            if povodny != nazov:   # premenovanie – presunie sa aj v košíkoch
+                for k in kosiky.values():
+                    if povodny in k["polozky"]:
+                        k["polozky"][nazov] = k["polozky"].pop(povodny)
+        else:
+            con.execute(
+                "INSERT INTO produkty (nazov, cena, kategoria, mnozstvo, obrazok) VALUES (%s, %s, %s, %s, %s)",
+                (nazov, cena, kategoria, mnozstvo, obrazok),
+            )
     return {"sprava": f"Produkt {nazov} bol {'upravený' if povodny else 'pridaný'}."}
 
 
 # API - ODSTRÁNENIE PRODUKTU
 @app.post("/api/admin/odstran")
 def odstran_zo_skladu(data: dict, u: str = Depends(over_admina)):
-    nazov = data.get("nazov")
-    with zamok:
-        if nazov in sklad:
-            del sklad[nazov]
-            uloz()
-            return {"sprava": f"Produkt {nazov} bol odstránený zo skladu."}
-    chyba("Produkt sa nenašiel.", 404)
+    nazov = str(data.get("nazov", ""))
+    with db() as con:
+        zmazane = con.execute("DELETE FROM produkty WHERE nazov = %s", (nazov,)).rowcount
+    if not zmazane:
+        chyba("Produkt sa nenašiel.", 404)
+    return {"sprava": f"Produkt {nazov} bol odstránený zo skladu."}
 
 
 # API - ZĽAVOVÉ KÓDY
@@ -352,17 +456,18 @@ def admin_pridaj_kupon(data: dict, u: str = Depends(over_admina)):
     if not re.fullmatch(r"[A-Z0-9_-]{3,20}", kod):
         chyba("Kód musí mať 3 až 20 znakov (písmená A–Z, čísla, - a _).")
     percenta = cele_cislo(data.get("percenta"), "Zľava v %", 1, 100)
-    with zamok:
-        kupony[kod] = percenta
-        uloz()
+    with db() as con:
+        con.execute(
+            "INSERT INTO kupony (kod, percenta) VALUES (%s, %s) ON CONFLICT (kod) DO UPDATE SET percenta = EXCLUDED.percenta",
+            (kod, percenta),
+        )
     return {"sprava": f"Kód {kod} (-{percenta} %) bol uložený."}
 
 
 @app.post("/api/admin/kupon/odstran")
 def admin_odstran_kupon(data: dict, u: str = Depends(over_admina)):
-    with zamok:
-        kupony.pop(str(data.get("kod", "")), None)
-        uloz()
+    with db() as con:
+        con.execute("DELETE FROM kupony WHERE kod = %s", (str(data.get("kod", "")),))
     return {"sprava": "Kód bol odstránený."}
 
 
@@ -535,7 +640,7 @@ let casovac;
 
 async function api(url, telo) {
     const moznosti = telo === undefined ? {} :
-        {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(telo)};
+        {method: "POST", headers: {"Content-Type": "application/json", "X-Requested-With": "eshop"}, body: JSON.stringify(telo)};
     const odpoved = await fetch(url, moznosti);
     const data = await odpoved.json().catch(() => ({}));
     if (!odpoved.ok) throw new Error(typeof data.detail === "string" ? data.detail : "Nastala chyba, skús to znova.");
@@ -817,7 +922,7 @@ let casovac;
 
 async function api(url, telo) {
     const moznosti = telo === undefined ? {} :
-        {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(telo)};
+        {method: "POST", headers: {"Content-Type": "application/json", "X-Requested-With": "eshop"}, body: JSON.stringify(telo)};
     const odpoved = await fetch(url, moznosti);
     if (odpoved.status === 401) { location.reload(); throw new Error("Prihlás sa znova."); }
     const d = await odpoved.json().catch(() => ({}));
@@ -949,3 +1054,33 @@ nacitajAdminSklad().catch(err => sprava(err.message, true));
 </script>
 </body>
 </html>"""
+
+
+# =====================================================================
+# 🛡️ BEZPEČNOSTNÉ HLAVIČKY (posielajú sa s každou odpoveďou)
+# =====================================================================
+
+def _odtlacky_skriptov(*stranky):
+    """Odtlačky (sha256) našich vlastných <script> blokov. Prehliadač potom spustí len tieto skripty –
+    keby sa do stránky nejako dostal cudzí <script> (XSS), prehliadač ho odmietne spustiť."""
+    odtlacky = []
+    for stranka in stranky:
+        for skript in re.findall(r"<script>(.*?)</script>", stranka, re.S):
+            odtlacok = base64.b64encode(hashlib.sha256(skript.encode("utf-8")).digest()).decode()
+            odtlacky.append(f"'sha256-{odtlacok}'")
+    return " ".join(odtlacky)
+
+
+BEZPECNOSTNE_HLAVICKY = {
+    "Content-Security-Policy": (
+        "default-src 'self'; "
+        f"script-src 'self' {_odtlacky_skriptov(HTML_ZAKAZNIK, HTML_ADMIN)}; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' https: data:; "
+        "connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+    ),
+    "X-Content-Type-Options": "nosniff",          # prehliadač nebude hádať typ súboru
+    "X-Frame-Options": "DENY",                    # stránku nemôže iná stránka vložiť do rámčeka (clickjacking)
+    "Referrer-Policy": "same-origin",
+    "Strict-Transport-Security": "max-age=31536000",   # vždy len cez HTTPS
+}
