@@ -23,8 +23,11 @@ from datetime import datetime
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from pathlib import Path
 
-import psycopg
-from psycopg.types.json import Jsonb
+try:
+    import psycopg                          # knižnica na PostgreSQL (requirements.txt: psycopg[binary])
+    from psycopg.types.json import Jsonb
+except ImportError:
+    psycopg = None
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
 from fastapi.responses import HTMLResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
@@ -37,6 +40,13 @@ ADMIN_MENO = "admin"
 ADMIN_HESLO = "Maxpol04"
 DATA_SUBOR = Path(__file__).with_name("data.json")   # sem sa ukladá sklad, kupóny a objednávky
 DATABASE_URL = os.environ.get("DATABASE_URL")       # 🗄️ adresa PostgreSQL databázy (Render → Environment)
+if DATABASE_URL and psycopg is None:
+    print("⚠️ CHYBA: chýba knižnica psycopg – do requirements.txt pridaj riadok: psycopg[binary]", flush=True)
+    DATABASE_URL = None                             # web pobeží, ale bez databázy (ukladá do data.json)
+elif DATABASE_URL:
+    print("🗄️ Pripájam sa k databáze PostgreSQL…", flush=True)
+else:
+    print("ℹ️ DATABASE_URL nie je nastavená – dáta sa ukladajú do data.json", flush=True)
 zamok = threading.RLock()
 
 # SKLAD (názov: cena v €, kategória, počet kusov, obrázok)
@@ -1026,3 +1036,4 @@ nacitajAdminSklad().catch(err => sprava(err.message, true));
 </script>
 </body>
 </html>"""
+
