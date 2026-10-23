@@ -9,6 +9,9 @@ Render – Start Command:
     uvicorn webrender:app --host 0.0.0.0 --port $PORT
 
 Obchod: /        Admin: /admin   (meno: admin, heslo: Maxpol04)
+
+DATABÁZA: na Render v Environment nastav DATABASE_URL = Internal Database URL z Render Postgres.
+Bez DATABASE_URL (napr. na počítači) sa dáta ukladajú do súboru data.json ako predtým.
 """
 
 import json
@@ -20,6 +23,8 @@ from datetime import datetime
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from pathlib import Path
 
+import psycopg
+from psycopg.types.json import Jsonb
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
 from fastapi.responses import HTMLResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
@@ -31,6 +36,7 @@ app = FastAPI()
 ADMIN_MENO = "admin"
 ADMIN_HESLO = "Maxpol04"
 DATA_SUBOR = Path(__file__).with_name("data.json")   # sem sa ukladá sklad, kupóny a objednávky
+DATABASE_URL = os.environ.get("DATABASE_URL")       # 🗄️ adresa PostgreSQL databázy (Render → Environment)
 zamok = threading.RLock()
 
 # SKLAD (názov: cena v €, kategória, počet kusov, obrázok)
@@ -60,27 +66,98 @@ kosiky = {}   # každý zákazník má vlastný košík: id -> {"polozky": {náz
 # POMOCNÉ FUNKCIE
 # =====================================================================
 
+# =====================================================================
+# 🗄️ DATABÁZA (PostgreSQL) – sklad, kupóny a objednávky prežijú reštart aj nový deploy
+# =====================================================================
+
+def db():
+    """Spojenie s databázou. Na konci bloku 'with db() as con:' sa zmeny uložia (COMMIT),
+    pri chybe sa všetko vráti späť (ROLLBACK)."""
+    return psycopg.connect(DATABASE_URL)
+
+
+def priprav_tabulky():
+    """Vytvorí tabuľky, ak ešte neexistujú. Vráti True, ak je databáza úplne nová."""
+    with db() as con:
+        nova = con.execute("SELECT to_regclass('produkty') IS NULL").fetchone()[0]
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS produkty (
+                nazov     TEXT PRIMARY KEY,
+                cena      NUMERIC(10, 2) NOT NULL,
+                kategoria TEXT NOT NULL,
+                mnozstvo  INTEGER NOT NULL,
+                obrazok   TEXT NOT NULL,
+                poradie   INTEGER NOT NULL
+            )""")
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS kupony (
+                kod      TEXT PRIMARY KEY,
+                percenta INTEGER NOT NULL
+            )""")
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS objednavky (
+                cislo  INTEGER PRIMARY KEY,
+                udaje  JSONB NOT NULL
+            )""")
+    return nova
+
+
 def uloz():
-    """Uloží sklad, kupóny a objednávky do data.json (prežijú reštart servera)."""
-    try:
-        DATA_SUBOR.write_text(
-            json.dumps({"sklad": sklad, "kupony": kupony, "objednavky": objednavky}, ensure_ascii=False, indent=1),
-            encoding="utf-8",
-        )
-    except OSError:
-        pass
+    """Uloží sklad, kupóny a objednávky do databázy (bez DATABASE_URL do data.json)."""
+    if not DATABASE_URL:
+        try:
+            DATA_SUBOR.write_text(
+                json.dumps({"sklad": sklad, "kupony": kupony, "objednavky": objednavky}, ensure_ascii=False, indent=1),
+                encoding="utf-8",
+            )
+        except OSError:
+            pass
+        return
+
+    # Hodnoty sa posielajú cez parametre %s (nie priamo v texte SQL) → ochrana proti SQL injection
+    with db() as con:
+        con.execute("DELETE FROM produkty")
+        for poradie, (nazov, p) in enumerate(sklad.items()):
+            con.execute(
+                "INSERT INTO produkty (nazov, cena, kategoria, mnozstvo, obrazok, poradie) VALUES (%s, %s, %s, %s, %s, %s)",
+                (nazov, p["cena"], p["kategoria"], p["mnozstvo"], p["obrazok"], poradie),
+            )
+        con.execute("DELETE FROM kupony")
+        for kod, percenta in kupony.items():
+            con.execute("INSERT INTO kupony (kod, percenta) VALUES (%s, %s)", (kod, percenta))
+        con.execute("DELETE FROM objednavky")
+        for o in objednavky:
+            con.execute("INSERT INTO objednavky (cislo, udaje) VALUES (%s, %s)", (o["cislo"], Jsonb(o)))
 
 
 def nacitaj():
-    if not DATA_SUBOR.exists():
+    """Načíta sklad, kupóny a objednávky z databázy (bez DATABASE_URL z data.json)."""
+    if not DATABASE_URL:
+        if not DATA_SUBOR.exists():
+            return
+        try:
+            d = json.loads(DATA_SUBOR.read_text(encoding="utf-8"))
+            sklad.clear(); sklad.update(d["sklad"])
+            kupony.clear(); kupony.update(d["kupony"])
+            objednavky[:] = d["objednavky"]
+        except (OSError, ValueError, KeyError):
+            pass
         return
-    try:
-        d = json.loads(DATA_SUBOR.read_text(encoding="utf-8"))
-        sklad.clear(); sklad.update(d["sklad"])
-        kupony.clear(); kupony.update(d["kupony"])
-        objednavky[:] = d["objednavky"]
-    except (OSError, ValueError, KeyError):
-        pass
+
+    if priprav_tabulky():   # úplne prvé spustenie → do databázy uložíme pôvodný sklad a kupóny
+        uloz()
+        return
+
+    with db() as con:
+        sklad.clear()
+        for nazov, cena, kategoria, mnozstvo, obrazok in con.execute(
+            "SELECT nazov, cena, kategoria, mnozstvo, obrazok FROM produkty ORDER BY poradie"
+        ).fetchall():
+            sklad[nazov] = {"cena": float(cena), "kategoria": kategoria, "mnozstvo": mnozstvo, "obrazok": obrazok}
+        kupony.clear()
+        for kod, percenta in con.execute("SELECT kod, percenta FROM kupony").fetchall():
+            kupony[kod] = percenta
+        objednavky[:] = [udaje for (udaje,) in con.execute("SELECT udaje FROM objednavky ORDER BY cislo").fetchall()]
 
 
 nacitaj()
